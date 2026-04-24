@@ -1,82 +1,238 @@
 package servidor;
 
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
 
 /**
- * SERVIDOR DE CHAT MULTI-CLIENT
- * ==============================
- * Aquest servidor escolta connexions entrants al port 12345.
- * Cada vegada que un client es connecta, es crea un nou fil (thread)
- * per gestionar-lo de forma independent (comunicació simultània).
- *
- * Protocol: TCP/IP (orientat a connexió, fiable)
- * Port: 12345
+ * Servidor de chat amb interfície Swing.
+ * Mostra un log de l'activitat i permet iniciar o aturar el servei.
  */
-public class ServidorXat {
+public class ServidorXat extends JFrame {
 
-    // Port on escoltarà el servidor
     static final int PORT = 12345;
+    static final List<ServidorGestorDelsClients> clientsConnectats = new CopyOnWriteArrayList<>();
 
-    // Llista compartida de tots els gestors de clients connectats
-    // "static" perquè tots els fils hi han d'accedir
-    static List<ServidorGestorDelsClients> clientsConnectats = new ArrayList<>();
+    private static final long serialVersionUID = 1L;
+    private static final DateTimeFormatter FORMAT_HORA = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    public static void main(String[] args) {
+    private static ServidorXat instancia;
 
-        System.out.println("=== SERVIDOR DE CHAT INICIANT ===");
-        System.out.println("Escoltant al port: " + PORT);
-        System.out.println("Esperant clients...");
-        System.out.println("---------------------------------");
+    private final JTextArea areaLog = new JTextArea();
+    private final JLabel etiquetaEstat = new JLabel("Servidor aturat");
+    private final JLabel etiquetaClients = new JLabel("Clients connectats: 0");
+    private final JButton botoIniciar = new JButton("Iniciar servidor");
+    private final JButton botoAturar = new JButton("Aturar servidor");
 
-        // try-with-resources: tanca el ServerSocket automàticament en acabar
-        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
+    private volatile boolean servidorActiu;
+    private ServerSocket serverSocket;
+    private Thread filAcceptacio;
 
-            // Bucle infinit: el servidor mai para d'escoltar
-            while (true) {
+    public ServidorXat() {
+        super("Servidor Xat");
+        instancia = this;
+        configurarFinestra();
+        configurarEsdeveniments();
+    }
 
-                // accept() BLOQUEJA fins que arriba un client
-                Socket socketClient = serverSocket.accept();
+    private void configurarFinestra() {
+        areaLog.setEditable(false);
+        areaLog.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
 
-                System.out.println("[+] Nou client connectat des de: "
-                        + socketClient.getInetAddress().getHostAddress());
+        JScrollPane scrollLog = new JScrollPane(areaLog);
+        scrollLog.setBorder(BorderFactory.createTitledBorder("Registre del servidor"));
 
-                // Creem un gestor per aquest client i l'arranquem en un fil nou
-                ServidorGestorDelsClients gestor = new ServidorGestorDelsClients(socketClient);
-                clientsConnectats.add(gestor);
-                new Thread(gestor).start();  // <-- comunicació simultània!
+        JPanel panellEstat = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panellEstat.add(etiquetaEstat);
+        panellEstat.add(new JLabel(" | "));
+        panellEstat.add(etiquetaClients);
+
+        JPanel panellBotons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        botoAturar.setEnabled(false);
+        panellBotons.add(botoIniciar);
+        panellBotons.add(botoAturar);
+
+        setLayout(new BorderLayout(10, 10));
+        add(panellEstat, BorderLayout.NORTH);
+        add(scrollLog, BorderLayout.CENTER);
+        add(panellBotons, BorderLayout.SOUTH);
+
+        setSize(760, 480);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+    }
+
+    private void configurarEsdeveniments() {
+        botoIniciar.addActionListener(e -> iniciarServidor());
+        botoAturar.addActionListener(e -> aturarServidor());
+
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                tancarAplicacio();
             }
+        });
+    }
 
-        } catch (IOException e) {
-            System.err.println("[ERROR] No s'ha pogut iniciar el servidor: " + e.getMessage());
+    private void iniciarServidor() {
+        if (servidorActiu) {
+            registrarEsdeveniment("El servidor ja està en marxa.");
+            return;
+        }
+
+        botoIniciar.setEnabled(false);
+        registrarEsdeveniment("Intentant iniciar el servidor al port " + PORT + "...");
+
+        filAcceptacio = new Thread(() -> {
+            boolean iniciatCorrectament = false;
+            try {
+                serverSocket = new ServerSocket(PORT);
+                servidorActiu = true;
+                iniciatCorrectament = true;
+
+                actualitzarEstat("Servidor escoltant al port " + PORT, true);
+                registrarEsdeveniment("Servidor iniciat correctament.");
+                registrarEsdeveniment("Esperant connexions de clients...");
+
+                while (servidorActiu) {
+                    Socket socketClient = serverSocket.accept();
+                    String ipClient = socketClient.getInetAddress().getHostAddress();
+                    registrarEsdeveniment("Nou client connectat des de " + ipClient + ".");
+
+                    try {
+                        ServidorGestorDelsClients gestor = new ServidorGestorDelsClients(socketClient);
+                        afegirClient(gestor);
+                        Thread filClient = new Thread(gestor, "Client-" + socketClient.getPort());
+                        filClient.start();
+                    } catch (IOException e) {
+                        registrarEsdeveniment("No s'ha pogut preparar el client: " + e.getMessage());
+                        socketClient.close();
+                    }
+                }
+            } catch (IOException e) {
+                if (servidorActiu || !iniciatCorrectament) {
+                    registrarEsdeveniment("Error iniciant o acceptant connexions: " + e.getMessage());
+                }
+            } finally {
+                servidorActiu = false;
+                tancarSocketServidor();
+                desconnectarTotsElsClients();
+                actualitzarEstat("Servidor aturat", false);
+                registrarEsdeveniment("Servidor aturat.");
+            }
+        }, "Acceptacio-Clients");
+
+        filAcceptacio.start();
+    }
+
+    private void aturarServidor() {
+        if (!servidorActiu && serverSocket == null) {
+            registrarEsdeveniment("El servidor ja està aturat.");
+            return;
+        }
+
+        registrarEsdeveniment("Aturant servidor...");
+        servidorActiu = false;
+        tancarSocketServidor();
+        desconnectarTotsElsClients();
+    }
+
+    private void tancarSocketServidor() {
+        if (serverSocket != null && !serverSocket.isClosed()) {
+            try {
+                serverSocket.close();
+            } catch (IOException e) {
+                registrarEsdeveniment("Error tancant el ServerSocket: " + e.getMessage());
+            }
+        }
+        serverSocket = null;
+    }
+
+    private void desconnectarTotsElsClients() {
+        for (ServidorGestorDelsClients client : clientsConnectats) {
+            client.tancarDesDeServidor();
         }
     }
 
-    /**
-     * Envia un missatge a TOTS els clients connectats.
-     * Es diu "broadcast" (difusió).
-     *
-     * @param missatge El text a enviar a tothom
-     * @param origen   El GestorClient que ha enviat el missatge (per no enviar-li a ell mateix)
-     */
-    static synchronized void broadcast(String missatge, ServidorGestorDelsClients origen) {
-        // "synchronized" evita problemes si dos fils envien alhora
+    private void tancarAplicacio() {
+        aturarServidor();
+        dispose();
+    }
+
+    private void afegirLog(String missatge) {
+        SwingUtilities.invokeLater(() -> {
+            String hora = LocalTime.now().format(FORMAT_HORA);
+            areaLog.append("[" + hora + "] " + missatge + System.lineSeparator());
+            areaLog.setCaretPosition(areaLog.getDocument().getLength());
+        });
+    }
+
+    private void actualitzarEstat(String textEstat, boolean actiu) {
+        SwingUtilities.invokeLater(() -> {
+            etiquetaEstat.setText(textEstat);
+            botoIniciar.setEnabled(!actiu);
+            botoAturar.setEnabled(actiu);
+            actualitzarComptadorClients();
+        });
+    }
+
+    private void actualitzarComptadorClients() {
+        SwingUtilities.invokeLater(() -> {
+            etiquetaClients.setText("Clients connectats: " + clientsConnectats.size());
+        });
+    }
+
+    static void registrarEsdeveniment(String missatge) {
+        if (instancia != null) {
+            instancia.afegirLog(missatge);
+        }
+    }
+
+    static void afegirClient(ServidorGestorDelsClients gestor) {
+        clientsConnectats.add(gestor);
+        if (instancia != null) {
+            instancia.actualitzarComptadorClients();
+        }
+    }
+
+    static void broadcast(String missatge, ServidorGestorDelsClients origen) {
         for (ServidorGestorDelsClients client : clientsConnectats) {
-            if (client != origen) {          // no enviem al propi remitent
+            if (client != origen) {
                 client.enviarMissatge(missatge);
             }
         }
     }
 
-    /**
-     * Elimina un client de la llista quan es desconnecta.
-     *
-     * @param gestor El GestorClient a eliminar
-     */
-    static synchronized void eliminarClient(ServidorGestorDelsClients gestor) {
+    static void eliminarClient(ServidorGestorDelsClients gestor) {
         clientsConnectats.remove(gestor);
+        if (instancia != null) {
+            instancia.actualitzarComptadorClients();
+        }
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            ServidorXat finestra = new ServidorXat();
+            finestra.setVisible(true);
+            finestra.iniciarServidor();
+        });
     }
 }

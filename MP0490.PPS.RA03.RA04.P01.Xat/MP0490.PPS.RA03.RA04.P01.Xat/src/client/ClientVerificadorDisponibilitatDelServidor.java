@@ -1,55 +1,110 @@
 package client;
 
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+
 /**
- * VERIFICADOR DE DISPONIBILITAT
- * ==============================
- * Eina per comprovar si el servidor de chat està en marxa (criteri 1.7).
- * Intenta obrir una connexió TCP al servidor.
- * Si s'obre correctament → el servei està disponible.
- * Si no → el servei no respon.
- *
- * Útil per:
- *   - Monitoratge del servei
- *   - Depuració (comprovar que el servidor s'ha arrencat)
- *   - Verificació abans de connectar el client
+ * Finestra senzilla per comprovar si el servidor està disponible.
  */
-public class ClientVerificadorDisponibilitatDelServidor {
+public class ClientVerificadorDisponibilitatDelServidor extends JFrame {
+
+    private static final long serialVersionUID = 1L;
 
     static final String ADRECA = "localhost";
     static final int PORT = 12345;
-    static final int TIMEOUT_MS = 2000; // Temps màxim d'espera: 2 segons
+    static final int TIMEOUT_MS = 2000;
 
-    public static void main(String[] args) {
+    private final JTextField campHost = new JTextField(ADRECA, 12);
+    private final JTextField campPort = new JTextField(String.valueOf(PORT), 6);
+    private final JLabel etiquetaResultat = new JLabel("Prem el botó per verificar el servei.");
+    private final JButton botoComprovar = new JButton("Comprovar");
 
-        System.out.println("=== VERIFICADOR DE DISPONIBILITAT ===");
-        System.out.printf("Comprovant %s:%d ...%n", ADRECA, PORT);
+    public ClientVerificadorDisponibilitatDelServidor() {
+        super("Verificador del Servidor");
+        configurarFinestra();
+        configurarEsdeveniments();
+    }
 
-        if (estaDisponible(ADRECA, PORT)) {
-            System.out.println("✓ SERVEI DISPONIBLE - El servidor de chat està en marxa.");
-        } else {
-            System.out.println("✗ SERVEI NO DISPONIBLE - El servidor no respon.");
-            System.out.println("  → Comprova que has arrencat ServidorChat.java");
+    private void configurarFinestra() {
+        JPanel panellDades = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panellDades.setBorder(BorderFactory.createTitledBorder("Connexió"));
+        panellDades.add(new JLabel("Servidor"));
+        panellDades.add(campHost);
+        panellDades.add(new JLabel("Port"));
+        panellDades.add(campPort);
+        panellDades.add(botoComprovar);
+
+        JPanel panellResultat = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panellResultat.setBorder(BorderFactory.createTitledBorder("Resultat"));
+        panellResultat.add(etiquetaResultat);
+
+        setLayout(new BorderLayout(10, 10));
+        add(panellDades, BorderLayout.NORTH);
+        add(panellResultat, BorderLayout.CENTER);
+
+        setSize(520, 180);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+    }
+
+    private void configurarEsdeveniments() {
+        botoComprovar.addActionListener(e -> comprovarDisponibilitat());
+    }
+
+    private void comprovarDisponibilitat() {
+        String host = campHost.getText().trim();
+        int port;
+
+        try {
+            port = Integer.parseInt(campPort.getText().trim());
+        } catch (NumberFormatException e) {
+            etiquetaResultat.setText("El port ha de ser un número vàlid.");
+            return;
+        }
+
+        etiquetaResultat.setText("Comprovant " + host + ":" + port + "...");
+        botoComprovar.setEnabled(false);
+
+        Thread filVerificacio = new Thread(() -> {
+            boolean disponible = estaDisponible(host, port);
+            SwingUtilities.invokeLater(() -> {
+                if (disponible) {
+                    etiquetaResultat.setText("Servei disponible: el servidor està en marxa.");
+                } else {
+                    etiquetaResultat.setText("Servei no disponible: el servidor no respon.");
+                }
+                botoComprovar.setEnabled(true);
+            });
+        }, "Verificador-Servidor");
+
+        filVerificacio.start();
+    }
+
+    public static boolean estaDisponible(String adreca, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(adreca, port), TIMEOUT_MS);
+            return true;
+        } catch (IOException e) {
+            return false;
         }
     }
 
-    /**
-     * Comprova si hi ha un servei escoltant a l'adreça i port indicats.
-     *
-     * @param adreca L'adreça IP o hostname del servidor
-     * @param port   El port TCP a verificar
-     * @return true si el servei respon, false si no
-     */
-    public static boolean estaDisponible(String adreca, int port) {
-        // Creem un socket sense connectar, amb timeout
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(adreca, port), TIMEOUT_MS);
-            return true; // Si hem pogut connectar, el servei està disponible
-        } catch (IOException e) {
-            return false; // No s'ha pogut connectar
-        }
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            ClientVerificadorDisponibilitatDelServidor finestra =
+                    new ClientVerificadorDisponibilitatDelServidor();
+            finestra.setVisible(true);
+        });
     }
 }
